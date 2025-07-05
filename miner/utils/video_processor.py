@@ -1,11 +1,26 @@
 import asyncio
 import time
-from typing import AsyncGenerator, Optional, Tuple, List
+from typing import AsyncGenerator, Optional, Tuple, List, Dict, Any
 import cv2
 import numpy as np
 import supervision as sv
 from loguru import logger
 import torch
+from pathlib import Path
+
+# Import RTX 4090 configuration
+try:
+    from rtx4090_config import get_adaptive_config, get_speed_mode_config, get_quality_mode_config
+except ImportError:
+    # Fallback configuration if rtx4090_config is not available
+    def get_adaptive_config(target_time: float = 12.0) -> Dict[str, Any]:
+        return {
+            "batch_size": 16,
+            "image_size": 1280,
+            "confidence_threshold": 0.2,
+            "iou_threshold": 0.4,
+            "target_fps": 20,
+        }
 
 class VideoProcessor:
     """Handles video processing with frame streaming and timeout management optimized for RTX 4090."""
@@ -18,10 +33,12 @@ class VideoProcessor:
         cpu_timeout: float = 10800.0,  # 3 hours for CPU
         batch_size: int = 10,  # RTX 4090 can handle larger batches
         image_size: int = 1920,  # Larger image size for RTX 4090
+        adaptive_mode: bool = True,  # Enable adaptive configuration
     ):
         self.device = device
         self.batch_size = batch_size
         self.image_size = image_size
+        self.adaptive_mode = adaptive_mode
         
         # Set timeout based on device
         if device == "cuda":
@@ -33,6 +50,67 @@ class VideoProcessor:
             
         logger.info(f"Video processor initialized with {device} device, timeout: {self.processing_timeout:.1f}s")
         logger.info(f"RTX 4090 optimizations: batch_size={batch_size}, image_size={image_size}")
+        logger.info(f"Adaptive mode: {adaptive_mode}")
+    
+    def _get_adaptive_config(self, video_path: str) -> Dict[str, Any]:
+        """
+        Get adaptive configuration based on video characteristics.
+        
+        Args:
+            video_path: Path to video file
+            
+        Returns:
+            Optimized configuration
+        """
+        if not self.adaptive_mode:
+            return {
+                "batch_size": self.batch_size,
+                "image_size": self.image_size,
+                "confidence_threshold": 0.25,
+                "iou_threshold": 0.45,
+            }
+        
+        try:
+            # Get video info
+            video_info = self.get_video_info(video_path)
+            total_frames = video_info.total_frames
+            fps = video_info.fps
+            duration = total_frames / fps if fps > 0 else 0
+            
+            # Estimate processing time based on video length
+            estimated_time = duration * 0.1  # Rough estimate: 10% of video duration
+            
+            logger.info(f"Video analysis: {total_frames} frames, {fps:.1f} FPS, {duration:.1f}s duration")
+            logger.info(f"Estimated processing time: {estimated_time:.1f}s")
+            
+            # Choose configuration based on estimated time
+            if estimated_time > 12.0:
+                # Long video - use speed mode
+                config = get_speed_mode_config()
+                logger.info("Using SPEED MODE configuration for long video")
+            elif estimated_time > 8.0:
+                # Medium video - use balanced mode
+                config = get_adaptive_config(12.0)
+                logger.info("Using BALANCED MODE configuration for medium video")
+            else:
+                # Short video - use quality mode
+                config = get_quality_mode_config()
+                logger.info("Using QUALITY MODE configuration for short video")
+            
+            # Update instance variables
+            self.batch_size = config.get("batch_size", self.batch_size)
+            self.image_size = config.get("image_size", self.image_size)
+            
+            return config
+            
+        except Exception as e:
+            logger.warning(f"Failed to get adaptive config: {e}, using defaults")
+            return {
+                "batch_size": self.batch_size,
+                "image_size": self.image_size,
+                "confidence_threshold": 0.25,
+                "iou_threshold": 0.45,
+            }
     
     async def stream_frames(
         self,
@@ -96,6 +174,11 @@ class VideoProcessor:
         Yields:
             Tuple[List[int], List[np.ndarray]]: Batch of frame numbers and frame data
         """
+        # Get adaptive configuration
+        config = self._get_adaptive_config(video_path)
+        batch_size = config.get("batch_size", self.batch_size)
+        image_size = config.get("image_size", self.image_size)
+        
         start_time = time.time()
         cap = cv2.VideoCapture(str(video_path))
         
@@ -116,7 +199,7 @@ class VideoProcessor:
                     break
                 
                 # Collect frames for batch processing
-                for _ in range(self.batch_size):
+                for _ in range(batch_size):
                     ret, frame = await asyncio.get_event_loop().run_in_executor(
                         None, cap.read
                     )
@@ -126,7 +209,7 @@ class VideoProcessor:
                     
                     # Resize frame for optimal processing
                     if self.device == "cuda":
-                        frame = self._resize_frame_for_gpu(frame)
+                        frame = self._resize_frame_for_gpu(frame, image_size)
                     
                     frame_numbers.append(len(frame_numbers))
                     frames.append(frame)
@@ -146,13 +229,16 @@ class VideoProcessor:
         finally:
             cap.release()
     
-    def _resize_frame_for_gpu(self, frame: np.ndarray) -> np.ndarray:
+    def _resize_frame_for_gpu(self, frame: np.ndarray, target_size: int = None) -> np.ndarray:
         """Resize frame to optimal size for RTX 4090 processing."""
-        if frame.shape[1] != self.image_size:  # width
+        if target_size is None:
+            target_size = self.image_size
+            
+        if frame.shape[1] != target_size:  # width
             aspect_ratio = frame.shape[1] / frame.shape[0]
-            new_width = self.image_size
+            new_width = target_size
             new_height = int(new_width / aspect_ratio)
-            frame = cv2.resize(frame, (new_width, new_height))
+            frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
         return frame
     
     @staticmethod
@@ -188,4 +274,16 @@ class VideoProcessor:
             return False
         except Exception as e:
             logger.error(f"Error checking video readability: {str(e)}")
-            return False 
+            return False
+    
+    def get_processing_config(self, video_path: str) -> Dict[str, Any]:
+        """
+        Get processing configuration for a specific video.
+        
+        Args:
+            video_path: Path to video file
+            
+        Returns:
+            Configuration dictionary
+        """
+        return self._get_adaptive_config(video_path) 
