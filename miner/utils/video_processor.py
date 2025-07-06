@@ -7,6 +7,7 @@ import supervision as sv
 from loguru import logger
 import torch
 from pathlib import Path
+import os
 
 # Import RTX 4090 configuration
 try:
@@ -40,6 +41,11 @@ class VideoProcessor:
         self.image_size = image_size
         self.adaptive_mode = adaptive_mode
         
+        # Check for force speed mode environment variable
+        self.force_speed_mode = os.getenv("FORCE_SPEED_MODE", "false").lower() == "true"
+        if self.force_speed_mode:
+            logger.info("FORCE_SPEED_MODE enabled - will use speed configuration for all videos")
+        
         # Set timeout based on device
         if device == "cuda":
             self.processing_timeout = cuda_timeout
@@ -51,6 +57,7 @@ class VideoProcessor:
         logger.info(f"Video processor initialized with {device} device, timeout: {self.processing_timeout:.1f}s")
         logger.info(f"RTX 4090 optimizations: batch_size={batch_size}, image_size={image_size}")
         logger.info(f"Adaptive mode: {adaptive_mode}")
+        logger.info(f"Force speed mode: {self.force_speed_mode}")
     
     def _get_adaptive_config(self, video_path: str) -> Dict[str, Any]:
         """
@@ -62,6 +69,14 @@ class VideoProcessor:
         Returns:
             Optimized configuration
         """
+        # Force speed mode takes priority
+        if self.force_speed_mode:
+            logger.info("Using FORCE_SPEED_MODE configuration")
+            config = get_speed_mode_config()
+            self.batch_size = config.get("batch_size", self.batch_size)
+            self.image_size = config.get("image_size", self.image_size)
+            return config
+        
         if not self.adaptive_mode:
             return {
                 "batch_size": self.batch_size,
@@ -83,19 +98,20 @@ class VideoProcessor:
             logger.info(f"Video analysis: {total_frames} frames, {fps:.1f} FPS, {duration:.1f}s duration")
             logger.info(f"Estimated processing time: {estimated_time:.1f}s")
             
-            # Choose configuration based on estimated time
-            if estimated_time > 12.0:
-                # Long video - use speed mode
-                config = get_speed_mode_config()
-                logger.info("Using SPEED MODE configuration for long video")
-            elif estimated_time > 8.0:
-                # Medium video - use balanced mode
-                config = get_adaptive_config(12.0)
-                logger.info("Using BALANCED MODE configuration for medium video")
-            else:
-                # Short video - use quality mode
+            # PRIORITY: Use speed mode for most videos to stay under 15s limit
+            # Only use quality mode for very short videos where we have time margin
+            if estimated_time <= 5.0 and duration <= 30.0:
+                # Very short video - use quality mode
                 config = get_quality_mode_config()
-                logger.info("Using QUALITY MODE configuration for short video")
+                logger.info("Using QUALITY MODE configuration for very short video")
+            elif estimated_time <= 8.0:
+                # Short video - use balanced mode
+                config = get_adaptive_config(12.0)
+                logger.info("Using BALANCED MODE configuration for short video")
+            else:
+                # Medium/long video - use speed mode (PRIORITY)
+                config = get_speed_mode_config()
+                logger.info("Using SPEED MODE configuration for medium/long video")
             
             # Update instance variables
             self.batch_size = config.get("batch_size", self.batch_size)
@@ -104,13 +120,9 @@ class VideoProcessor:
             return config
             
         except Exception as e:
-            logger.warning(f"Failed to get adaptive config: {e}, using defaults")
-            return {
-                "batch_size": self.batch_size,
-                "image_size": self.image_size,
-                "confidence_threshold": 0.25,
-                "iou_threshold": 0.45,
-            }
+            logger.warning(f"Failed to get adaptive config: {e}, using speed mode defaults")
+            # Default to speed mode for safety
+            return get_speed_mode_config()
     
     async def stream_frames(
         self,

@@ -8,6 +8,9 @@ import time
 from loguru import logger
 from typing import List, Dict, Union
 
+# Set environment variables for testing
+os.environ["FORCE_SPEED_MODE"] = "true"  # Force speed mode for testing
+
 miner_dir = str(Path(__file__).resolve().parents[1])
 sys.path.insert(0, miner_dir)
 

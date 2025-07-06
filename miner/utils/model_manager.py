@@ -4,6 +4,9 @@ from ultralytics import YOLO
 from loguru import logger
 import torch
 import supervision as sv
+import os
+import numpy as np
+import cv2
 
 from miner.utils.device import get_optimal_device, get_rtx4090_optimal_batch_size, get_rtx4090_optimal_image_size
 
@@ -56,13 +59,14 @@ ENHANCED_RTX4090_CONFIG = {
 }
 
 class ModelManager:
-    """Manages the loading and caching of YOLO models optimized for RTX 4090."""
+    """Manages the loading and caching of YOLO models optimized for RTX 4090, with engine reuse and flexible input size."""
     
-    def __init__(self, device: Optional[str] = None):
+    def __init__(self, device: Optional[str] = None, input_size=(1280, 720)):
         self.device = get_optimal_device(device)
         self.models: Dict[str, YOLO] = {}
         self.data_dir = Path(__file__).parent.parent / "data"
         self.data_dir.mkdir(exist_ok=True)
+        self.input_size = input_size  # (width, height)
         
         # RTX 4090 specific optimizations
         self.batch_size = get_rtx4090_optimal_batch_size()
@@ -127,13 +131,16 @@ class ModelManager:
         
         return model
     
+    def _get_engine_path(self, model_path, input_size):
+        # Engine file name encodes input size for uniqueness
+        w, h = input_size
+        return Path(str(model_path).replace('.pt', f'_{w}x{h}.engine'))
+
     def load_model(self, model_name: str) -> YOLO:
         """
-        Load a model by name, using cache if available.
-        
+        Load a model by name, using cache if available. Reuse TensorRT engine if available.
         Args:
             model_name: Name of the model to load ('player', 'pitch', or 'ball')
-            
         Returns:
             YOLO: The loaded model
         """
@@ -144,18 +151,42 @@ class ModelManager:
             raise ValueError(f"Unknown model: {model_name}")
         
         model_path = self.model_paths[model_name]
-        if not model_path.exists():
-            raise FileNotFoundError(
-                f"Model file not found: {model_path}. "
-                "Please ensure all required models are downloaded."
-            )
+        engine_path = self._get_engine_path(model_path, self.input_size)
         
+        # PRIORITY: Always try to load existing engine first
+        if engine_path.exists():
+            logger.info(f"Loading existing TensorRT engine for {model_name} from {engine_path}")
+            try:
+                model = YOLO(str(engine_path))
+                # Apply RTX 4090 optimizations
+                model = self._optimize_model_for_rtx4090(model)
+                self.models[model_name] = model
+                return model
+            except Exception as e:
+                logger.warning(f"Failed to load engine {engine_path}: {e}, will export new one")
+        
+        # Only export if engine doesn't exist or failed to load
         logger.info(f"Loading {model_name} model from {model_path} to {self.device}")
         model = YOLO(str(model_path))
         
+        # Export to engine if on CUDA and engine doesn't exist
+        if self.device == "cuda" and not engine_path.exists():
+            logger.info(f"Exporting {model_name} to TensorRT engine for input size {self.input_size}")
+            try:
+                model.export(format="engine", imgsz=self.input_size, device=self.device, half=True)
+                # Save engine with unique name
+                if Path("engine.engine").exists():
+                    os.rename("engine.engine", engine_path)
+                    logger.info(f"TensorRT engine saved to {engine_path}")
+                    # Reload as engine
+                    model = YOLO(str(engine_path))
+                else:
+                    logger.warning("Engine export completed but file not found")
+            except Exception as e:
+                logger.error(f"Failed to export engine for {model_name}: {e}")
+        
         # Apply RTX 4090 optimizations
         model = self._optimize_model_for_rtx4090(model)
-        
         self.models[model_name] = model
         return model
     
@@ -247,4 +278,31 @@ class EnhancedModelManager(ModelManager):
             model.iou = 0.5
         
         self.quality_models[model_name] = model
-        return model 
+        return model
+
+    # Utility: Pad frame to square for square-only models
+    @staticmethod
+    def pad_to_square(frame, size=1280):
+        h, w = frame.shape[:2]
+        top = (size - h) // 2
+        bottom = size - h - top
+        left = (size - w) // 2
+        right = size - w - left
+        return cv2.copyMakeBorder(frame, top, bottom, left, right, cv2.BORDER_CONSTANT, value=0)
+
+    # Utility: Crop/correct output from square to 1280x720
+    @staticmethod
+    def crop_coords_from_square(coords, orig_w=1280, orig_h=720, padded_size=1280):
+        pad_y = (padded_size - orig_h) // 2
+        pad_x = (padded_size - orig_w) // 2
+        if isinstance(coords, (list, tuple)) and len(coords) == 2:
+            return [coords[0] - pad_x, coords[1] - pad_y]
+        elif isinstance(coords, (list, tuple)) and len(coords) == 4:
+            return [
+                coords[0] - pad_x, coords[1] - pad_y,
+                coords[2] - pad_x, coords[3] - pad_y
+            ]
+        elif isinstance(coords, (list, tuple)):
+            return [ModelManager.crop_coords_from_square(c, orig_w, orig_h, padded_size) for c in coords]
+        else:
+            raise ValueError("Unsupported coordinate format") 
