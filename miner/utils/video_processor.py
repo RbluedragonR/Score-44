@@ -16,7 +16,7 @@ except ImportError:
     # Fallback configuration if rtx4090_config is not available
     def get_speed_mode_config() -> Dict[str, Any]:
         return {
-            "batch_size": 20,  # Increased batch size for speed
+            "batch_size": 24,  # Increased batch size for speed
             "image_size": 1024,  # Smaller image size for speed
             "confidence_threshold": 0.15,  # Lower threshold for faster detection
             "iou_threshold": 0.35,  # Lower NMS threshold

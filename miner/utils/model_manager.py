@@ -165,7 +165,17 @@ class ModelManager:
         if engine_path.exists():
             logger.info(f"Loading existing TensorRT engine for {model_name} from {engine_path}")
             try:
-                model = YOLO(str(engine_path))
+                # Load TensorRT engine with correct parameters
+                if model_name == "pitch":
+                    # Pitch model is pose detection
+                    model = YOLO(str(engine_path), task="pose")
+                else:
+                    # Player model is object detection
+                    model = YOLO(str(engine_path), task="detect")
+                
+                # Move to device
+                model = model.to(device=self.device)
+                
                 # Apply RTX 4090 optimizations
                 model = self._optimize_model_for_rtx4090(model)
                 self.models[model_name] = model
@@ -182,7 +192,17 @@ class ModelManager:
             existing_engine = possible_engines[0]
             logger.info(f"Found existing engine {existing_engine} for {model_name}, using it")
             try:
-                model = YOLO(str(existing_engine))
+                # Load TensorRT engine with correct parameters
+                if model_name == "pitch":
+                    # Pitch model is pose detection
+                    model = YOLO(str(existing_engine), task="pose")
+                else:
+                    # Player model is object detection
+                    model = YOLO(str(existing_engine), task="detect")
+                
+                # Move to device
+                model = model.to(device=self.device)
+                
                 model = self._optimize_model_for_rtx4090(model)
                 self.models[model_name] = model
                 return model
