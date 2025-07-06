@@ -26,7 +26,7 @@ INPUT_SIZES = [
 ]
 
 # Model names
-MODELS = ["player", "pitch", "ball"]
+MODELS = ["player", "pitch"]
 
 def build_engines_for_size(input_size: tuple, device: str = "cuda"):
     """Build engines for all models at a specific input size."""

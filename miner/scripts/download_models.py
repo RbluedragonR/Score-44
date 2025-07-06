@@ -10,9 +10,8 @@ from typing import Optional
 # All models in a single repository
 REPO_ID = "tmoklc/scorevisionv1"
 MODELS = [
-    "football-player-detection.pt",
-    "football-ball-detection.pt",
-    "football-pitch-detection.pt"
+    "football-player-detection.pt",  # Detects: players, goalkeepers, referees, balls
+    "football-pitch-detection.pt"    # Detects: pitch keypoints
 ]
 
 def download_models():

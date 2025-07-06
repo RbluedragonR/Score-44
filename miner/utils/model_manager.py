@@ -13,13 +13,12 @@ from miner.utils.device import get_optimal_device, get_rtx4090_optimal_batch_siz
 # Models downloaded from Hugging Face
 REPO_ID = "tmoklc/scorevisionv1"
 MODELS = [
-    "football-player-detection.pt",  # Detects: players, goalkeepers, referees
-    "football-ball-detection.pt",    # Detects: ball
+    "football-player-detection.pt",  # Detects: players, goalkeepers, referees, BALLS
     "football-pitch-detection.pt"    # Detects: pitch keypoints
 ]
 
 # Class ID mapping (from validator code, but used by miner)
-BALL_CLASS_ID = 0        # Ball detection
+BALL_CLASS_ID = 0        # Ball detection (from player model)
 GOALKEEPER_CLASS_ID = 1  # Goalkeeper detection  
 PLAYER_CLASS_ID = 2      # Regular player detection
 REFEREE_CLASS_ID = 3     # Referee detection
@@ -74,9 +73,8 @@ class ModelManager:
         
         # Define model paths
         self.model_paths = {
-            "player": self.data_dir / "football-player-detection.pt",  # Main detection model
+            "player": self.data_dir / "football-player-detection.pt",  # Main detection model (includes ball detection)
             "pitch": self.data_dir / "football-pitch-detection.pt",    # Pitch keypoints
-            "ball": self.data_dir / "football-ball-detection.pt"      # Ball detection
         }
         
         # Check if models exist, download if missing
@@ -174,14 +172,19 @@ class ModelManager:
             logger.info(f"Exporting {model_name} to TensorRT engine for input size {self.input_size}")
             try:
                 model.export(format="engine", imgsz=self.input_size, device=self.device, half=True)
-                # Save engine with unique name
-                if Path("engine.engine").exists():
-                    os.rename("engine.engine", engine_path)
+                # Save engine with unique name - check both possible locations
+                engine_file = Path("engine.engine")
+                if not engine_file.exists():
+                    # Try the model directory
+                    engine_file = model_path.parent / "engine.engine"
+                
+                if engine_file.exists():
+                    os.rename(str(engine_file), str(engine_path))
                     logger.info(f"TensorRT engine saved to {engine_path}")
                     # Reload as engine
                     model = YOLO(str(engine_path))
                 else:
-                    logger.warning("Engine export completed but file not found")
+                    logger.warning(f"Engine export completed but file not found at {engine_file}")
             except Exception as e:
                 logger.error(f"Failed to export engine for {model_name}: {e}")
         

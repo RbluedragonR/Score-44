@@ -78,7 +78,7 @@ async def process_soccer_video_rtx4090(
                 # Process pitch detection in batch
                 pitch_results = pitch_model(frames, verbose=False)
                 
-                # Process player detection in batch
+                # Process player detection in batch (includes ball detection)
                 player_results = player_model(frames, imgsz=image_size, verbose=False)
                 
                 # Process each frame in the batch
