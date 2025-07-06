@@ -67,6 +67,11 @@ class ModelManager:
         self.data_dir.mkdir(exist_ok=True)
         self.input_size = input_size  # (width, height) - 1280x704 is divisible by 32
         
+        # Check for skip TensorRT flag
+        self.skip_tensorrt = os.getenv('SKIP_TENSORRT', 'false').lower() == 'true'
+        if self.skip_tensorrt:
+            logger.info("SKIP_TENSORRT enabled - will use PyTorch models directly")
+        
         # RTX 4090 specific optimizations
         self.batch_size = get_rtx4090_optimal_batch_size()
         self.image_size = get_rtx4090_optimal_image_size()
@@ -115,17 +120,22 @@ class ModelManager:
             # Move to GPU
             model = model.to(device=self.device)
             
-            # Enable TensorRT for faster inference
-            model.export(format="engine", device=self.device, half=True)
+            # Check for speed mode environment variable
+            speed_mode = os.getenv("FORCE_SPEED_MODE", "false").lower() == "true"
+            
+            if speed_mode:
+                # Speed mode optimizations
+                model.conf = 0.15  # Lower confidence threshold for speed
+                model.iou = 0.35   # Lower NMS threshold for speed
+                logger.info(f"Model optimized for RTX 4090 SPEED MODE with batch_size={self.batch_size}, image_size={self.image_size}")
+            else:
+                # Standard optimizations
+                model.conf = 0.25  # Standard confidence threshold
+                model.iou = 0.45   # Standard NMS threshold
+                logger.info(f"Model optimized for RTX 4090 with batch_size={self.batch_size}, image_size={self.image_size}")
             
             # Enable mixed precision
             model.fuse()
-            
-            # Set optimal parameters
-            model.conf = 0.25  # Confidence threshold
-            model.iou = 0.45   # NMS IoU threshold
-            
-            logger.info(f"Model optimized for RTX 4090 with batch_size={self.batch_size}, image_size={self.image_size}")
         
         return model
     
@@ -138,7 +148,7 @@ class ModelManager:
         """
         Load a model by name, using cache if available. Reuse TensorRT engine if available.
         Args:
-            model_name: Name of the model to load ('player', 'pitch', or 'ball')
+            model_name: Name of the model to load ('player' or 'pitch')
         Returns:
             YOLO: The loaded model
         """
@@ -163,22 +173,44 @@ class ModelManager:
             except Exception as e:
                 logger.warning(f"Failed to load engine {engine_path}: {e}, will export new one")
         
-        # Only export if engine doesn't exist or failed to load
+        # Check for any existing engine files for this model
+        model_stem = model_path.stem
+        possible_engines = list(self.data_dir.glob(f"{model_stem}*.engine"))
+        
+        if possible_engines:
+            # Use the first available engine (different input size is better than recompiling)
+            existing_engine = possible_engines[0]
+            logger.info(f"Found existing engine {existing_engine} for {model_name}, using it")
+            try:
+                model = YOLO(str(existing_engine))
+                model = self._optimize_model_for_rtx4090(model)
+                self.models[model_name] = model
+                return model
+            except Exception as e:
+                logger.warning(f"Failed to load existing engine {existing_engine}: {e}")
+        
+        # Only export if no engines exist
         logger.info(f"Loading {model_name} model from {model_path} to {self.device}")
         model = YOLO(str(model_path))
         
-        # Export to engine if on CUDA and engine doesn't exist
-        if self.device == "cuda" and not engine_path.exists():
+        # Skip TensorRT if flag is enabled
+        if self.skip_tensorrt:
+            logger.info(f"Skipping TensorRT compilation for {model_name}, using PyTorch model directly")
+        # Export to engine if on CUDA and no engines exist
+        elif self.device == "cuda" and not possible_engines:
             logger.info(f"Exporting {model_name} to TensorRT engine for input size {self.input_size}")
             try:
                 model.export(format="engine", imgsz=self.input_size, device=self.device, half=True)
                 
-                # YOLO saves the engine file in the same directory as the model with name "engine.engine"
+                # YOLO saves the engine file in the same directory as the model
                 # Check multiple possible locations
                 possible_engine_paths = [
                     Path("engine.engine"),  # Current directory
                     model_path.parent / "engine.engine",  # Model directory
                     self.data_dir / "engine.engine",  # Data directory
+                    # YOLO actually saves with model name prefix
+                    model_path.parent / f"{model_path.stem}.engine",  # Model name + .engine
+                    self.data_dir / f"{model_path.stem}.engine",  # Data dir + model name + .engine
                 ]
                 
                 engine_file = None
@@ -196,6 +228,8 @@ class ModelManager:
                 else:
                     logger.warning(f"Engine export completed but file not found in any expected location")
                     logger.warning(f"Checked paths: {[str(p) for p in possible_engine_paths]}")
+                    # List what's actually in the data directory
+                    logger.info(f"Files in data directory: {list(self.data_dir.glob('*.engine'))}")
             except Exception as e:
                 logger.error(f"Failed to export engine for {model_name}: {e}")
         

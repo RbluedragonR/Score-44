@@ -14,6 +14,24 @@ try:
     from rtx4090_config import get_adaptive_config, get_speed_mode_config, get_quality_mode_config
 except ImportError:
     # Fallback configuration if rtx4090_config is not available
+    def get_speed_mode_config() -> Dict[str, Any]:
+        return {
+            "batch_size": 20,  # Increased batch size for speed
+            "image_size": 1024,  # Smaller image size for speed
+            "confidence_threshold": 0.15,  # Lower threshold for faster detection
+            "iou_threshold": 0.35,  # Lower NMS threshold
+            "target_fps": 25,  # Target 25 FPS
+        }
+    
+    def get_quality_mode_config() -> Dict[str, Any]:
+        return {
+            "batch_size": 12,
+            "image_size": 1920,
+            "confidence_threshold": 0.25,
+            "iou_threshold": 0.45,
+            "target_fps": 15,
+        }
+    
     def get_adaptive_config(target_time: float = 12.0) -> Dict[str, Any]:
         return {
             "batch_size": 16,
