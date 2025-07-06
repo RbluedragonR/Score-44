@@ -124,7 +124,7 @@ async def process_soccer_video_rtx4090(
                 pitch_result = pitch_model(frame, verbose=False)[0]
                 keypoints = sv.KeyPoints.from_ultralytics(pitch_result)
                 
-                player_result = player_model(frame, imgsz=1280, verbose=False)[0]
+                player_result = player_model(frame, imgsz=image_size, verbose=False)[0]
                 detections = sv.Detections.from_ultralytics(player_result)
                 detections = tracker.update_with_detections(detections)
                 

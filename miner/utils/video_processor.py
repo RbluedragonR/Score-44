@@ -253,6 +253,33 @@ class VideoProcessor:
             frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
         return frame
     
+    def scale_coordinates(self, coords: List[float], from_size: Tuple[int, int], to_size: Tuple[int, int]) -> List[float]:
+        """
+        Scale coordinates from model input size to expected output size.
+        
+        Args:
+            coords: [x, y] or [x1, y1, x2, y2] coordinates
+            from_size: (width, height) of model input
+            to_size: (width, height) of expected output
+            
+        Returns:
+            Scaled coordinates
+        """
+        if len(coords) == 2:  # Single point [x, y]
+            x, y = coords
+            scaled_x = (x / from_size[0]) * to_size[0]
+            scaled_y = (y / from_size[1]) * to_size[1]
+            return [scaled_x, scaled_y]
+        elif len(coords) == 4:  # Bounding box [x1, y1, x2, y2]
+            x1, y1, x2, y2 = coords
+            scaled_x1 = (x1 / from_size[0]) * to_size[0]
+            scaled_y1 = (y1 / from_size[1]) * to_size[1]
+            scaled_x2 = (x2 / from_size[0]) * to_size[0]
+            scaled_y2 = (y2 / from_size[1]) * to_size[1]
+            return [scaled_x1, scaled_y1, scaled_x2, scaled_y2]
+        else:
+            return coords
+    
     @staticmethod
     def get_video_info(video_path: str) -> sv.VideoInfo:
         """Get video information using supervision."""

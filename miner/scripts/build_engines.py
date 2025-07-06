@@ -19,9 +19,9 @@ from utils.model_manager import ModelManager
 
 # Input sizes to build engines for
 INPUT_SIZES = [
-    (1280, 720),   # Standard 16:9
+    (1280, 704),   # Standard 16:9 (divisible by 32)
     (1280, 1280),  # Square
-    (1920, 1080),  # Full HD
+    (1920, 1088),  # Full HD (divisible by 32)
     (1920, 1920),  # Large square
 ]
 

@@ -87,7 +87,7 @@ async def main():
             device = get_optimal_device()
             logger.info(f"Using device: {device}")
             
-            model_manager = ModelManager(device=device)
+            model_manager = ModelManager(device=device, input_size=(1280, 704))
             
             logger.info("Loading models...")
             model_manager.load_all_models()

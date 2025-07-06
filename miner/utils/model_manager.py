@@ -60,12 +60,12 @@ ENHANCED_RTX4090_CONFIG = {
 class ModelManager:
     """Manages the loading and caching of YOLO models optimized for RTX 4090, with engine reuse and flexible input size."""
     
-    def __init__(self, device: Optional[str] = None, input_size=(1280, 720)):
+    def __init__(self, device: Optional[str] = None, input_size=(1280, 704)):
         self.device = get_optimal_device(device)
         self.models: Dict[str, YOLO] = {}
         self.data_dir = Path(__file__).parent.parent / "data"
         self.data_dir.mkdir(exist_ok=True)
-        self.input_size = input_size  # (width, height)
+        self.input_size = input_size  # (width, height) - 1280x704 is divisible by 32
         
         # RTX 4090 specific optimizations
         self.batch_size = get_rtx4090_optimal_batch_size()
@@ -172,19 +172,30 @@ class ModelManager:
             logger.info(f"Exporting {model_name} to TensorRT engine for input size {self.input_size}")
             try:
                 model.export(format="engine", imgsz=self.input_size, device=self.device, half=True)
-                # Save engine with unique name - check both possible locations
-                engine_file = Path("engine.engine")
-                if not engine_file.exists():
-                    # Try the model directory
-                    engine_file = model_path.parent / "engine.engine"
                 
-                if engine_file.exists():
+                # YOLO saves the engine file in the same directory as the model with name "engine.engine"
+                # Check multiple possible locations
+                possible_engine_paths = [
+                    Path("engine.engine"),  # Current directory
+                    model_path.parent / "engine.engine",  # Model directory
+                    self.data_dir / "engine.engine",  # Data directory
+                ]
+                
+                engine_file = None
+                for path in possible_engine_paths:
+                    if path.exists():
+                        engine_file = path
+                        break
+                
+                if engine_file:
+                    # Rename to our custom path with input size
                     os.rename(str(engine_file), str(engine_path))
                     logger.info(f"TensorRT engine saved to {engine_path}")
                     # Reload as engine
                     model = YOLO(str(engine_path))
                 else:
-                    logger.warning(f"Engine export completed but file not found at {engine_file}")
+                    logger.warning(f"Engine export completed but file not found in any expected location")
+                    logger.warning(f"Checked paths: {[str(p) for p in possible_engine_paths]}")
             except Exception as e:
                 logger.error(f"Failed to export engine for {model_name}: {e}")
         
