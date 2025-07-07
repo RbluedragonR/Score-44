@@ -73,8 +73,14 @@ class ModelManager:
             logger.info("SKIP_TENSORRT enabled - will use PyTorch models directly")
         
         # RTX 4090 specific optimizations
-        self.batch_size = get_rtx4090_optimal_batch_size()
-        self.image_size = get_rtx4090_optimal_image_size()
+        # Force speed mode if requested
+        if os.getenv("FORCE_SPEED_MODE", "false").lower() == "true":
+            self.batch_size = 20
+            self.image_size = 1024
+            logger.info("FORCE_SPEED_MODE: Forcing batch_size=20, image_size=1024 in ModelManager")
+        else:
+            self.batch_size = get_rtx4090_optimal_batch_size()
+            self.image_size = get_rtx4090_optimal_image_size()
         
         # Define model paths
         self.model_paths = {

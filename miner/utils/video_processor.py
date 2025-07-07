@@ -63,6 +63,8 @@ class VideoProcessor:
         self.force_speed_mode = os.getenv("FORCE_SPEED_MODE", "false").lower() == "true"
         if self.force_speed_mode:
             logger.info("FORCE_SPEED_MODE enabled - will use speed configuration for all videos")
+            self.batch_size = 20
+            self.image_size = 1024
         
         # Set timeout based on device
         if device == "cuda":
@@ -73,7 +75,7 @@ class VideoProcessor:
             self.processing_timeout = cpu_timeout
             
         logger.info(f"Video processor initialized with {device} device, timeout: {self.processing_timeout:.1f}s")
-        logger.info(f"RTX 4090 optimizations: batch_size={batch_size}, image_size={image_size}")
+        logger.info(f"RTX 4090 optimizations: batch_size={self.batch_size}, image_size={self.image_size}")
         logger.info(f"Adaptive mode: {adaptive_mode}")
         logger.info(f"Force speed mode: {self.force_speed_mode}")
     
@@ -89,11 +91,16 @@ class VideoProcessor:
         """
         # Force speed mode takes priority
         if self.force_speed_mode:
-            logger.info("Using FORCE_SPEED_MODE configuration")
-            config = get_speed_mode_config()
-            self.batch_size = config.get("batch_size", self.batch_size)
-            self.image_size = config.get("image_size", self.image_size)
-            return config
+            logger.info("Using FORCE_SPEED_MODE configuration (hardcoded batch_size=20, image_size=1024)")
+            self.batch_size = 20
+            self.image_size = 1024
+            return {
+                "batch_size": 20,
+                "image_size": 1024,
+                "confidence_threshold": 0.15,
+                "iou_threshold": 0.35,
+                "target_fps": 25,
+            }
         
         if not self.adaptive_mode:
             return {
